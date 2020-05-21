@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using static AssetStudio.ImportHelper;
 
@@ -56,6 +57,83 @@ namespace AssetStudio
             ProcessAssets();
         }
 
+        public void LoadAPK(string apkFile)
+        {
+            var apk = File.OpenRead(apkFile);
+            var archive = new ZipArchive(apk);
+
+            // 读取所有资源文件
+            var allFileList = new List<string>();
+            foreach(var entry in archive.Entries)
+            {
+                if (entry.FullName.StartsWith("assets/bin/Data"))
+                {
+                    allFileList.Add(entry.FullName);
+                }
+            }
+
+            // 找到被切割(split)的文件
+            var partsFile = allFileList.FindAll(el => el.EndsWith("split0"));
+            foreach(var p in partsFile)
+            {
+                var assetsFile = Path.Combine(Path.GetDirectoryName(p), Path.GetFileNameWithoutExtension(p))
+                    .Replace(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+                var ms = new MemoryStream();
+                var splitCount = allFileList.FindAll(el => el.StartsWith(assetsFile)).Count;
+                for(var i = 0; i < splitCount; ++i)
+                {
+                    var partName = assetsFile + ".split" + i;
+                    var entry = archive.GetEntry(partName);
+                    if (entry == null)
+                    {
+                        continue;
+                    }
+
+                    entry.Open().CopyTo(ms);
+                    allFileList.Remove(partName);
+                }
+                ms.Position = 0;
+                var reader = new EndianBinaryReader(ms);
+                this.LoadFile(assetsFile, reader);
+            }
+
+            // 读取剩余文件
+            foreach(var fname in allFileList)
+            {
+                var entry = archive.GetEntry(fname);
+                var ms = new MemoryStream();
+                entry.Open().CopyTo(ms);
+                ms.Position = 0;
+
+                var reader = new EndianBinaryReader(ms);
+                this.LoadFile(fname, reader);
+            }
+
+            importFiles.Clear();
+            importFilesHash.Clear();
+            assetsFileListHash.Clear();
+
+            this.ReadAssets();
+            this.ProcessAssets();
+        }
+
+        private void LoadFile(string fullName, EndianBinaryReader reader)
+        {
+            switch (GetFileType(reader))
+            {
+                case FileType.AssetsFile:
+                    LoadAssetsFile(fullName, reader);
+                    break;
+                case FileType.BundleFile:
+                    LoadBundleFile(fullName, reader);
+                    break;
+                case FileType.WebFile:
+                    LoadWebFile(fullName, reader);
+                    break;
+            }
+        }
+
         private void LoadFile(string fullName)
         {
             switch (CheckFileType(fullName, out var reader))
@@ -84,29 +162,29 @@ namespace AssetStudio
                     assetsFileList.Add(assetsFile);
                     assetsFileListHash.Add(assetsFile.fileName);
 
-                    foreach (var sharedFile in assetsFile.m_Externals)
-                    {
-                        var sharedFilePath = Path.GetDirectoryName(fullName) + "\\" + sharedFile.fileName;
-                        var sharedFileName = sharedFile.fileName;
+                    //foreach (var sharedFile in assetsFile.m_Externals)
+                    //{
+                    //    var sharedFilePath = Path.GetDirectoryName(fullName) + "\\" + sharedFile.fileName;
+                    //    var sharedFileName = sharedFile.fileName;
 
-                        if (!importFilesHash.Contains(sharedFileName))
-                        {
-                            if (!File.Exists(sharedFilePath))
-                            {
-                                var findFiles = Directory.GetFiles(Path.GetDirectoryName(fullName), sharedFileName, SearchOption.AllDirectories);
-                                if (findFiles.Length > 0)
-                                {
-                                    sharedFilePath = findFiles[0];
-                                }
-                            }
+                    //    if (!importFilesHash.Contains(sharedFileName))
+                    //    {
+                    //        if (!File.Exists(sharedFilePath))
+                    //        {
+                    //            var findFiles = Directory.GetFiles(Path.GetDirectoryName(fullName), sharedFileName, SearchOption.AllDirectories);
+                    //            if (findFiles.Length > 0)
+                    //            {
+                    //                sharedFilePath = findFiles[0];
+                    //            }
+                    //        }
 
-                            if (File.Exists(sharedFilePath))
-                            {
-                                importFiles.Add(sharedFilePath);
-                                importFilesHash.Add(sharedFileName);
-                            }
-                        }
-                    }
+                    //        if (File.Exists(sharedFilePath))
+                    //        {
+                    //            importFiles.Add(sharedFilePath);
+                    //            importFilesHash.Add(sharedFileName);
+                    //        }
+                    //    }
+                    //}
                 }
                 catch
                 {
